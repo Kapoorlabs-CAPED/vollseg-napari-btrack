@@ -413,8 +413,12 @@ def plugin_wrapper_btrack():
         progress_bar.label = "Starting BTrack"
         if model_selected_vollseg is not None:
             vollseg_model = get_model_vollseg(*model_selected_vollseg)
-
-        axes_out = None
+        else:
+            vollseg_model = None    
+        if len(x.shape) == 3: 
+           axes_out = list('TYX')
+        if len(x.shape) == 4:
+            axes_out = list('TZYX')   
         if vollseg_model is not None:
             assert vollseg_model._axes_out[-1] == "C"
             axes_out = list(vollseg_model._axes_out[:-1])
@@ -425,7 +429,7 @@ def plugin_wrapper_btrack():
         if "T" in axes:
             t = axes_dict(axes)["T"]
             n_frames = x.shape[t]
-
+            print(n_frames)
             def progress_thread(current_time):
 
                 progress_bar.label = "Skeletonizing tissue in frame " + str(current_time)
@@ -437,7 +441,8 @@ def plugin_wrapper_btrack():
             x_reorder = np.moveaxis(x, t, 0)
 
             axes_reorder = axes.replace("T", "")
-            axes_out.insert(t, "T")
+            if 'T' not in axes_out:
+               axes_out.insert(t, "T")
             # determine scale for output axes
             scale_in_dict = dict(zip(axes, image.scale))
             scale_out = [scale_in_dict.get(a, 1.0) for a in axes_out]
@@ -472,46 +477,75 @@ def plugin_wrapper_btrack():
                 plugin.viewer.value.layers.remove(layer)
 
         plugin.viewer.value.add_labels(layer_data, name="Seg_BTrack")
-        time_line_locations = []
+        time_line_locations = {}
         for i in range(layer_data.shape[0]):
                 skeletonizer = Skeletonizer(layer_data[i].astype(np.uint16))
                 for point in skeletonizer.end_points:
                        if ndim == 3:
                             y, x = point 
-                            time_line_locations.append((i,y,x))
+                            if i not in time_line_locations:
+                                time_line_locations[i] = [(y,x)]
+                            else:
+                                y_x_list = time_line_locations[i]
+                                y_x_list.append((y,x))
+                                time_line_locations[i] = y_x_list
                        if ndim == 4:
                             z, y, x = point 
-                            time_line_locations.append((i,z,y,x))   
+                            if i not in time_line_locations:
+                                time_line_locations[i] = [(z,y,x)]
+                            else:
+                                z_y_x_list = time_line_locations[i]
+                                z_y_x_list.append((z,y,x))
+                                time_line_locations[i] = z_y_x_list       
 
         markers = np.zeros_like(layer_data)                      
-        for i in range(time_line_locations):
-                Coordinates = time_line_locations[i]
-                Coordinates = np.asarray(Coordinates)
-                coordinates_int = np.round(Coordinates).astype(int)
+        for (time,Coordinates) in time_line_locations.items():
 
-                markers_raw = markers[i]
-                markers_raw[tuple(coordinates_int.T)] = 1 + np.arange(len(Coordinates))
-                if ndim == 4:
-                    markers[i] = morphology.dilation(
+                if ndim==3:
+               
+                  coordinates_int = np.round(Coordinates).astype(int)
+                  markers_raw = markers[time]
+                  markers_raw[tuple(coordinates_int.T)] = 1 + np.arange(len(Coordinates))
+         
+                if ndim==4:
+                   
+                    coordinates_int = np.round(Coordinates).astype(int)
+                    markers_raw = markers[time]
+                    markers_raw[tuple(coordinates_int.T)] = 1 + np.arange(len(Coordinates))
+
+                    
+        if ndim == 3:
+            for j in range(markers.shape[0]):
+                    markers[j] = morphology.dilation(
+                                    markers_raw.astype("uint16"), morphology.disk(2)
+                                )           
+        if ndim == 4:
+
+             for j in range(markers.shape[0]):
+                markers[j] = morphology.dilation(
                         markers_raw.astype("uint16"), morphology.ball(2)
                     )
-                if ndim == 3:
-                    markers[i] = morphology.dilation(
-                        markers_raw.astype("uint16"), morphology.disk(2)
-                    )   
-        _perform_tracking(markers, layer_data)            
+
+
+                    
+                    
         plugin.viewer.value.add_labels(markers, name="Seg_BTrack_Dots")      
         if ndim == 4:   
             face_color = [0] * 4
         if ndim == 3:
-            face_color = [0] * 3    
+            face_color = [0] * 3   
+        time_line_array = []     
+        for (time, Coordinates) in time_line_locations.items():  
+            for cord in Coordinates:
+              time_line_array.append((time, *cord))    
         plugin.viewer.value.add_points(
-            np.asarray(time_line_locations),
+            np.asarray(time_line_array),
             name="Fits_BTrack",
             face_color=face_color,
             edge_color="red",
             edge_width=1,
         )
+        #_perform_tracking(markers, layer_data)
 
     def _perform_tracking(markers, layer_data):
         objects = btrack.utils.segmentation_to_objects(
@@ -521,19 +555,18 @@ def plugin_wrapper_btrack():
         with btrack.BayesianTracker() as tracker:
             tracker.configure(default_tracking_config)
             tracker.append(objects)
-            data, properties, graph = tracker.to_napari()
             if ndim == 4:
               #YXZ
               tracker.volume=((0, layer_data.shape[2]), (0, layer_data.shape[3]), (0, layer_data.shape[1]))
             if ndim == 3:
                 #XY
-                tracker.volume=((0, layer_data.shape[2]), (0, layer_data.shape[3]))  
+                tracker.volume=((0, layer_data.shape[1]), (0, layer_data.shape[2]))  
             tracker.optimize()
             # store the tracks
             tracks = tracker.tracks
             # store the configuration
             cfg = tracker.configuration
-            data, properties, graph = tracker.to_napari()
+            data, properties, graph = tracker.to_napari(ndim -1)
 
         plugin.viewer.add_tracks(data, properties=properties, graph=graph)
 
@@ -545,7 +578,7 @@ def plugin_wrapper_btrack():
         _refreshPlotData(table_tab._data.get_data())
 
 
-    @thread_worker(connect={"returned": [return_segment_unet_time, plot_main]})
+    @thread_worker(connect={"returned": [return_segment_unet_time]})
     def _Unet_time(
         model_unet, x_reorder, axes_reorder, scale_out, t, x, tracking_model
     ):

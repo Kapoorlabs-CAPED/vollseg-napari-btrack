@@ -99,7 +99,159 @@ def plugin_wrapper_btrack():
         ("IOU", IOUTracker),
         ("Kalman", CentroidKF_Tracker),
     ]
+    default_tracking_config = {
+  "name": "Default",
+  "version": "0.5.0",
+  "verbose": False,
+  "motion_model": {
+    "measurements": 3,
+    "states": 6,
+    "A": [
+      1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+      0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
+      0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+      0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+      0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+      0.0, 0.0, 0.0, 0.0, 0.0, 1.0
+    ],
+    "H": [
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+      0.0, 0.0, 1.0, 0.0, 0.0, 0.0
+    ],
+    "P": [
+      15.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      0.0, 15.0, 0.0, 0.0, 0.0, 0.0,
+      0.0, 0.0, 15.0, 0.0, 0.0, 0.0,
+      0.0, 0.0, 0.0, 150.0, 0.0, 0.0,
+      0.0, 0.0, 0.0, 0.0, 150.0, 0.0,
+      0.0, 0.0, 0.0, 0.0, 0.0, 150.0
+    ],
+    "R": [
+      5.0, 0.0, 0.0,
+      0.0, 5.0, 0.0,
+      0.0, 0.0, 5.0
+    ],
+    "G": [ 7.5, 7.5, 7.5, 15.0, 15.0, 15.0],
+    "Q": [
+      56.25, 56.25, 56.25, 112.5, 112.5, 112.5,
+      56.25, 56.25, 56.25, 112.5, 112.5, 112.5,
+      56.25, 56.25, 56.25, 112.5, 112.5, 112.5,
+      112.5, 112.5, 112.5, 225.0, 225.0, 225.0,
+      112.5, 112.5, 112.5, 225.0, 225.0, 225.0,
+      112.5, 112.5, 112.5, 225.0, 225.0, 225.0
+    ],
+    "dt": 1.0,
+    "accuracy": 7.5,
+    "max_lost": 5,
+    "prob_not_assign": 0.001,
+    "name": "cell_motion"
+  },
+  "object_model": None,
+  "hypothesis_model": {
+    "hypotheses": [
+      "P_FP",
+      "P_init",
+      "P_term",
+      "P_link",
+      "P_branch",
+      "P_dead"
+    ],
+    "lambda_time": 5.0,
+    "lambda_dist": 3.0,
+    "lambda_link": 10.0,
+    "lambda_branch": 50.0,
+    "eta": 1e-10,
+    "theta_dist": 20.0,
+    "theta_time": 5.0,
+    "dist_thresh": 37.0,
+    "time_thresh": 2.0,
+    "apop_thresh": 5,
+    "segmentation_miss_rate": 0.1,
+    "apoptosis_rate": 0.001,
+    "relax": True,
+    "name": "cell_hypothesis"
+  },
+  "max_search_radius": 100.0,
+  "return_kalman": False,
+  "volume": None,
+  "update_method": 0,
+  "optimizer_options": {
+    "tm_lim": 60000
+  },
+  "features": [],
+  "tracking_updates": [
+    1
+  ]
+}
+    cell_tracking_config = {
+        "TrackerConfig":
+    {
+      "MotionModel":
+        {
+          "name": "cell_motion",
+          "dt": 1.0,
+          "measurements": 3,
+          "states": 6,
+          "accuracy": 7.5,
+          "prob_not_assign": 0.001,
+          "max_lost": 5,
+          "A": {
+            "matrix": [1,0,0,1,0,0,
+                       0,1,0,0,1,0,
+                       0,0,1,0,0,1,
+                       0,0,0,1,0,0,
+                       0,0,0,0,1,0,
+                       0,0,0,0,0,1]
+          },
+          "H": {
+            "matrix": [1,0,0,0,0,0,
+                       0,1,0,0,0,0,
+                       0,0,1,0,0,0]
+          },
+          "P": {
+            "sigma": 150.0,
+            "matrix": [0.1,0,0,0,0,0,
+                       0,0.1,0,0,0,0,
+                       0,0,0.1,0,0,0,
+                       0,0,0,1,0,0,
+                       0,0,0,0,1,0,
+                       0,0,0,0,0,1]
+          },
+          "G": {
+            "sigma": 15.0,
+            "matrix": [0.5,0.5,0.5,1,1,1]
 
+          },
+          "R": {
+            "sigma": 5.0,
+            "matrix": [1,0,0,
+                       0,1,0,
+                       0,0,1]
+          }
+        },
+      "ObjectModel":
+        {},
+      "HypothesisModel":
+        {
+          "name": "cell_hypothesis",
+          "hypotheses": ["P_FP", "P_init", "P_term", "P_link", "P_branch", "P_dead"],
+          "lambda_time": 5.0,
+          "lambda_dist": 3.0,
+          "lambda_link": 10.0,
+          "lambda_branch": 50.0,
+          "eta": 1e-10,
+          "theta_dist": 20.0,
+          "theta_time": 5.0,
+          "dist_thresh": 40,
+          "time_thresh": 2,
+          "apop_thresh": 5,
+          "segmentation_miss_rate": 0.1,
+          "apoptosis_rate": 0.001,
+          "relax": True
+        }
+    }
+    }
     DEFAULTS_MODEL = dict(
         vollseg_model_type=CUSTOM_VOLLSEG,
         tracking_model_type=CentroidTracker,
@@ -114,7 +266,7 @@ def plugin_wrapper_btrack():
     DEFAULTS_SEG_PARAMETERS = dict(n_tiles=(1, 1, 1))
 
     DEFAULTS_PRED_PARAMETERS = dict(
-       max_lost = 5
+       max_search_radius = 50
     )
 
     def get_model_tracking(tracking_model_type):
@@ -141,12 +293,12 @@ def plugin_wrapper_btrack():
 
     @magicgui(
         
-         max_lost=dict(
+         max_search_radius=dict(
             widget_type="SpinBox",
             label="Maximum number of consecutive frames object was not detected",
             min=0.0,
             step=1,
-            value=DEFAULTS_PRED_PARAMETERS["max_lost"],
+            value=DEFAULTS_PRED_PARAMETERS["max_search_radius"],
         ),
         tracking_model_type=dict(
             widget_type="RadioButtons",
@@ -161,7 +313,7 @@ def plugin_wrapper_btrack():
         call_button=False,
     )
     def plugin_tracking_parameters(
-        max_lost,
+        max_search_radius,
         tracking_model_type,
         defaults_params_button,
     ) -> List[napari.types.LayerDataTuple]:
@@ -350,6 +502,7 @@ def plugin_wrapper_btrack():
                     markers[i] = morphology.dilation(
                         markers_raw.astype("uint16"), morphology.disk(2)
                     )   
+        _perform_tracking(markers, layer_data)            
         plugin.viewer.value.add_labels(markers, name="Seg_BTrack_Dots")      
         if ndim == 4:   
             face_color = [0] * 4
@@ -362,6 +515,31 @@ def plugin_wrapper_btrack():
             edge_color="red",
             edge_width=1,
         )
+
+    def _perform_tracking(markers, layer_data):
+        objects = btrack.utils.segmentation_to_objects(
+                    markers
+                    )
+        ndim = len(layer_data.shape)
+        with btrack.BayesianTracker() as tracker:
+            tracker.configure(default_tracking_config)
+            tracker.append(objects)
+            data, properties, graph = tracker.to_napari()
+            if ndim == 4:
+              #YXZ
+              tracker.volume=((0, layer_data.shape[2]), (0, layer_data.shape[3]), (0, layer_data.shape[1]))
+            if ndim == 3:
+                #XY
+                tracker.volume=((0, layer_data.shape[2]), (0, layer_data.shape[3]))  
+            tracker.optimize()
+            # store the tracks
+            tracks = tracker.tracks
+            # store the configuration
+            cfg = tracker.configuration
+            data, properties, graph = tracker.to_napari()
+            
+        plugin.viewer.add_tracks(data, properties=properties, graph=graph)
+
 
 
     def plot_main():

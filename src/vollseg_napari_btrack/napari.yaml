@@ -1,0 +1,18 @@
+name: vollseg-napari-btrack
+display_name: VollSeg Napari BTrack Plugin
+contributions:
+  commands:
+    - id: vollseg-napari-btrack.make_sample_data
+      python_name: vollseg_napari_btrack._sample_data:make_sample_data
+      title: Load sample data from VollSeg Napari BTrack Plugin
+    - id: vollseg-napari-btrack.widget
+      python_name: vollseg_napari_btrack._widget:plugin_wrapper_btrack
+      title: BTrack
+
+  sample_data:
+    - command: vollseg-napari-btrack.make_sample_data
+      display_name: VollSeg Napari BTrack Plugin
+      key: unique_id.1
+  widgets:
+    - command: vollseg-napari-btrack.widget
+      display_name: BTrack

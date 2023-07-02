@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 
 [tool.setuptools_scm]
-write_to = "src/vollseg_napari_mtrack/_version.py"
+write_to = "src/vollseg_napari_btrack/_version.py"
 
 [tool.black]
 line-length = 79

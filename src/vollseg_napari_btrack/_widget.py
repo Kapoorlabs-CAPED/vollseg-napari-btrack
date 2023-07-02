@@ -20,15 +20,14 @@ from napari.qt.threading import thread_worker
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 from skimage.morphology import thin
-
+from motrackers import CentroidTracker, IOUTracker, CentroidKF_Tracker
 ITERATIONS = 20
 MAXTRIALS = 100
 
 
 def plugin_wrapper_btrack():
 
-    from caped_ai_btrack.Fits import Comboskeleton, skeleton
-    from caped_ai_btrack.skeletonModels import LinearFunction, QuadraticFunction
+    from caped_ai_btrack.Skel import Skeletonizer
     from csbdeep.utils import axes_check_and_normalize, axes_dict, load_json
     from vollseg import UNET, VollSeg
     from vollseg.pretrained import get_model_folder, get_registered_models
@@ -94,31 +93,32 @@ def plugin_wrapper_btrack():
         ("NOSEG", "NOSEG"),
     ]
 
-    skeleton_model_type_choices = [
-        ("Linear", LinearFunction),
-        ("Quadratic", QuadraticFunction),
+    track_model_type_choices = [
+        ("Centroid", CentroidTracker),
+        ("IOU", IOUTracker),
+        ("Kalman", CentroidKF_Tracker),
     ]
 
     DEFAULTS_MODEL = dict(
         vollseg_model_type=CUSTOM_VOLLSEG,
+        tracking_model_type=CentroidTracker,
         model_vollseg=models_vollseg[0][0],
         model_vollseg_none="NOSEG",
         axes="TYX",
-        skeleton_model_type=LinearFunction,
         microscope_calibration_space=1,
         microscope_calibration_time=1,
     )
 
-    model_selected_skeleton = DEFAULTS_MODEL["skeleton_model_type"]
+    model_selected_tracking = DEFAULTS_MODEL["tracking_model_type"]
     DEFAULTS_SEG_PARAMETERS = dict(n_tiles=(1, 1, 1))
 
     DEFAULTS_PRED_PARAMETERS = dict(
-        max_error=0.0001, min_num_time_points=2, time_axis=0
+       
     )
 
-    def get_model_skeleton(skeleton_model_type):
+    def get_model_tracking(tracking_model_type):
 
-        return skeleton_model_type
+        return tracking_model_type
 
     @functools.lru_cache(maxsize=None)
     def get_model_vollseg(vollseg_model_type, model_vollseg):
@@ -139,48 +139,26 @@ def plugin_wrapper_btrack():
             return None
 
     @magicgui(
-        max_error=dict(
-            widget_type="FloatSpinBox",
-            label="Max error",
-            min=0.00000000000001,
-            step=0.0005,
-            value=DEFAULTS_PRED_PARAMETERS["max_error"],
-        ),
-        min_num_time_points=dict(
-            widget_type="SpinBox",
-            label="Minimum number of timepoints",
-            min=0.0,
-            step=1,
-            value=DEFAULTS_PRED_PARAMETERS["min_num_time_points"],
-        ),
-        time_axis=dict(
-            widget_type="SpinBox",
-            label="Kymograph time axis (0 for along y, 1 for along x)",
-            min=0,
-            step=1,
-            value=DEFAULTS_PRED_PARAMETERS["time_axis"],
-        ),
-        skeleton_model_type=dict(
+        
+       
+        tracking_model_type=dict(
             widget_type="RadioButtons",
-            label="skeleton Model Type",
+            label="Tracking Model Type",
             orientation="horizontal",
-            choices=skeleton_model_type_choices,
-            value=DEFAULTS_MODEL["skeleton_model_type"],
+            choices=track_model_type_choices,
+            value=DEFAULTS_MODEL["tracking_model_type"],
         ),
         defaults_params_button=dict(
             widget_type="PushButton", text="Restore Parameter Defaults"
         ),
         call_button=False,
     )
-    def plugin_skeleton_parameters(
-        max_error,
-        min_num_time_points,
-        time_axis,
-        skeleton_model_type,
+    def plugin_tracking_parameters(
+        tracking_model_type,
         defaults_params_button,
     ) -> List[napari.types.LayerDataTuple]:
 
-        return plugin_skeleton_parameters
+        return plugin_tracking_parameters
 
     kapoorlogo = abspath(__file__, "resources/kapoorlogo.png")
     citation = Path("https://doi.org/10.1038/s41598-018-37767-1")
@@ -243,14 +221,14 @@ def plugin_wrapper_btrack():
             widget_type="PushButton", text="Restore Model Defaults"
         ),
         manual_compute_button=dict(
-            widget_type="PushButton", text="Recompute with manual functions"
+            widget_type="PushButton", text="Retrack"
         ),
         recompute_current_button=dict(
-            widget_type="PushButton", text="Recompute current file fits"
+            widget_type="PushButton", text="Recompute current skeletons"
         ),
         progress_bar=dict(label=" ", min=0, max=0, visible=False),
         layout="vertical",
-        persist=True,
+        persist=False,
         call_button=True,
     )
     def plugin(
@@ -285,7 +263,7 @@ def plugin_wrapper_btrack():
             axes_out = list(vollseg_model._axes_out[:-1])
         scale_in_dict = dict(zip(axes, image.scale))
         scale_out = [scale_in_dict.get(a, 1.0) for a in axes_out]
-        skeleton_model = get_model_skeleton(model_selected_skeleton)
+        tracking_model = get_model_tracking(model_selected_tracking)
 
         if "T" in axes:
             t = axes_dict(axes)["T"]
@@ -313,12 +291,12 @@ def plugin_wrapper_btrack():
                 scale_out,
                 t,
                 x,
-                skeleton_model,
+                tracking_model,
             )
             worker.returned.connect(return_segment_unet_time)
             worker.yielded.connect(progress_thread)
         else:
-            worker = _Unet(vollseg_model, x, axes, scale_out, skeleton_model)
+            worker = _Unet(vollseg_model, x, axes, scale_out, tracking_model)
             worker.returned.connect(return_segment_unet)
 
         progress_bar.hide()
@@ -359,12 +337,12 @@ def plugin_wrapper_btrack():
 
         layer_data, line_locations, scale_out = pred
         ndim = len(get_data(plugin.image.value).shape)
-        name_remove = ["Fits_MTrack", "Seg_MTrack"]
+        name_remove = ["Fits_BTrack", "Seg_BTrack"]
         for layer in list(plugin.viewer.value.layers):
             if any(name in layer.name for name in name_remove):
                 plugin.viewer.value.layers.remove(layer)
 
-        plugin.viewer.value.add_labels(layer_data, name="Seg_MTrack")
+        plugin.viewer.value.add_labels(layer_data, name="Seg_BTrack")
 
         plugin.viewer.value.add_shapes(
             np.asarray(line_locations),
@@ -379,7 +357,7 @@ def plugin_wrapper_btrack():
 
     @thread_worker(connect={"returned": [return_segment_unet_time, plot_main]})
     def _Unet_time(
-        model_unet, x_reorder, axes_reorder, scale_out, t, x, skeleton_model
+        model_unet, x_reorder, axes_reorder, scale_out, t, x, tracking_model
     ):
         pre_res = []
         yield 0
@@ -443,107 +421,23 @@ def plugin_wrapper_btrack():
 
                     layer_data = layer.data
 
-        if skeleton_model == LinearFunction:
-            degree = 2
-        if skeleton_model == QuadraticFunction:
-            degree = 3
 
-        time_estimators = {}
-        time_estimator_inliers = {}
-        time_line_locations = []
-        for count, i in enumerate(range(layer_data.shape[0])):
-            yield count
-            non_zero_indices = list(zip(*np.where(layer_data[i] > 0)))
-            sorted_non_zero_indices = sorted(
-                non_zero_indices,
-                key=lambda x: x[plugin_skeleton_parameters.time_axis.value],
-            )
-            if plugin_skeleton_parameters.time_axis.value == 0:
-                temp_sorted_non_zero_indices = [
-                    (sub[1], sub[0]) for sub in sorted_non_zero_indices
-                ]
-            sorted_non_zero_indices = temp_sorted_non_zero_indices
-            if len(sorted_non_zero_indices) > 0:
-                if skeleton_model == LinearFunction:
-                    skeleton_result = skeleton(
-                        sorted_non_zero_indices,
-                        skeleton_model,
-                        degree,
-                        min_samples=plugin_skeleton_parameters.min_num_time_points.value,
-                        max_trials=MAXTRIALS,
-                        iterations=ITERATIONS,
-                        residual_threshold=plugin_skeleton_parameters.max_error.value,
-                        save_name="",
-                    )
-                if skeleton_model == QuadraticFunction:
+       
+        if tracking_model == IOUTracker:
+            print("IOUTracker")
+        if tracking_model == CentroidKF_Tracker:
 
-                    skeleton_result = Comboskeleton(
-                        sorted_non_zero_indices,
-                        LinearFunction,
-                        QuadraticFunction,
-                        min_samples=plugin_skeleton_parameters.min_num_time_points.value,
-                        max_trials=MAXTRIALS,
-                        iterations=ITERATIONS,
-                        residual_threshold=plugin_skeleton_parameters.max_error.value,
-                        save_name="",
-                    )
+            print("CentroidKF_Tracker")
+        if tracking_model == CentroidTracker:
 
-                (
-                    estimators,
-                    estimator_inliers,
-                ) = skeleton_result.extract_multiple_lines()
+            print("CentroidTracker")   
 
-                time_estimators[i] = estimators
-                time_estimator_inliers[i] = estimator_inliers
 
-                line_locations = []
-                for j in range(len(estimators)):
-
-                    estimator = estimators[j]
-                    estimator_inlier = estimator_inliers[j]
-                    estimator_inliers_list = np.copy(estimator_inlier)
-                    if (
-                        len(estimator_inliers_list)
-                        > plugin_skeleton_parameters.min_num_time_points.value
-                    ):
-                        yarray, xarray = zip(*estimator_inliers_list.tolist())
-                        yarray = np.asarray(yarray)
-                        xarray = np.asarray(xarray)
-                        time = xarray
-                        time.sort()
-                        if int(time[-1]) > int(time[0]):
-                            line_locations.append(
-                                [
-                                    [time[0], estimator.predict(time[0])],
-                                    [time[-1], estimator.predict(time[-1])],
-                                ]
-                            )
-                            time_line_locations.append(
-                                [
-                                    [i, time[0], estimator.predict(time[0])],
-                                    [i, time[-1], estimator.predict(time[-1])],
-                                ]
-                            )
-                        else:
-                            time[-1] = time[-1] + 1
-                            line_locations.append(
-                                [
-                                    [time[0], estimator.predict(time[0])],
-                                    [time[-1], estimator.predict(time[-1])],
-                                ]
-                            )
-                            time_line_locations.append(
-                                [
-                                    [i, time[0], estimator.predict(time[0])],
-                                    [i, time[-1], estimator.predict(time[-1])],
-                                ]
-                            )
-
-        pred = layer_data, time_line_locations, scale_out
+        pred = layer_data, scale_out
         return pred
 
     @thread_worker(connect={"returned": [return_segment_unet, plot_main]})
-    def _Unet(model_unet, x, axes, scale_out, skeleton_model):
+    def _Unet(model_unet, x, axes, scale_out, tracking_model):
 
         correct_label_present = []
         any_label_present = []
@@ -588,78 +482,16 @@ def plugin_wrapper_btrack():
 
                     layer_data = layer.data
 
-        non_zero_indices = list(zip(*np.where(layer_data > 0)))
-        sorted_non_zero_indices = sorted(
-            non_zero_indices,
-            key=lambda x: x[plugin_skeleton_parameters.time_axis.value],
-        )
+       
+        if tracking_model == IOUTracker:
+            print('iou tracker')
+        if tracking_model == CentroidKF_Tracker:
+            print('centroid kf tracker')
 
-        if plugin_skeleton_parameters.time_axis.value == 0:
-            temp_sorted_non_zero_indices = [
-                (sub[1], sub[0]) for sub in sorted_non_zero_indices
-            ]
-        sorted_non_zero_indices = temp_sorted_non_zero_indices
+        if tracking_model == CentroidTracker:
+            print('centroid tracker')
 
-        if skeleton_model == LinearFunction:
-            degree = 2
-            skeleton_result = skeleton(
-                sorted_non_zero_indices,
-                skeleton_model,
-                degree,
-                min_samples=plugin_skeleton_parameters.min_num_time_points.value,
-                max_trials=MAXTRIALS,
-                iterations=ITERATIONS,
-                residual_threshold=plugin_skeleton_parameters.max_error.value,
-                save_name="",
-            )
-        if skeleton_model == QuadraticFunction:
-            degree = 3
-
-            skeleton_result = Comboskeleton(
-                sorted_non_zero_indices,
-                LinearFunction,
-                QuadraticFunction,
-                min_samples=plugin_skeleton_parameters.min_num_time_points.value,
-                max_trials=MAXTRIALS,
-                iterations=ITERATIONS,
-                residual_threshold=plugin_skeleton_parameters.max_error.value,
-                save_name="",
-            )
-
-        estimators, estimator_inliers = skeleton_result.extract_multiple_lines()
-
-        line_locations = []
-        for i in range(len(estimators)):
-
-            estimator = estimators[i]
-            estimator_inlier = estimator_inliers[i]
-            estimator_inliers_list = np.copy(estimator_inlier)
-            if (
-                len(estimator_inliers_list)
-                > plugin_skeleton_parameters.min_num_time_points.value
-            ):
-                yarray, xarray = zip(*estimator_inliers_list.tolist())
-                yarray = np.asarray(yarray)
-                xarray = np.asarray(xarray)
-                time = xarray
-                time.sort()
-                if int(time[-1]) > int(time[0]):
-                    line_locations.append(
-                        [
-                            [time[0], estimator.predict(time[0])],
-                            [time[-1], estimator.predict(time[-1])],
-                        ]
-                    )
-                else:
-                    time[-1] = time[-1] + 1
-                    line_locations.append(
-                        [
-                            [time[0], estimator.predict(time[0])],
-                            [time[-1], estimator.predict(time[-1])],
-                        ]
-                    )
-
-        pred = layer_data, line_locations, scale_out
+        pred = layer_data, scale_out
         return pred
 
     widget_for_vollseg_modeltype = {
@@ -673,12 +505,12 @@ def plugin_wrapper_btrack():
     parameter_skeleton_tab = QWidget()
     _parameter_skeleton_tab_layout = QVBoxLayout()
     parameter_skeleton_tab.setLayout(_parameter_skeleton_tab_layout)
-    _parameter_skeleton_tab_layout.addWidget(plugin_skeleton_parameters.native)
-    tabs.addTab(parameter_skeleton_tab, "skeleton Parameter Selection")
+    _parameter_skeleton_tab_layout.addWidget(plugin_tracking_parameters.native)
+    tabs.addTab(parameter_skeleton_tab, "Tracking Parameter Selection")
 
     plot_class = TemporalStatistics(tabs)
     plot_tab = plot_class.stat_plot_tab
-    tabs.addTab(plot_tab, "skeleton Plots")
+    tabs.addTab(plot_tab, "Analysis Plots")
 
     table_tab = Tabulour()
     table_tab.clicked.connect(table_tab._on_user_click)
@@ -732,8 +564,8 @@ def plugin_wrapper_btrack():
         _refreshPlotData(df)
 
     def select_model_skeleton(key):
-        nonlocal model_selected_skeleton
-        model_selected_skeleton = key
+        nonlocal model_selected_tracking
+        model_selected_tracking = key
 
     def widgets_inactive(*widgets, active):
         for widget in widgets:
@@ -944,10 +776,10 @@ def plugin_wrapper_btrack():
         ):
             model_selected_vollseg = None
 
-    @change_handler(plugin_skeleton_parameters.skeleton_model_type, init=False)
-    def _skeleton_model_change():
+    @change_handler(plugin_tracking_parameters.tracking_model_type, init=False)
+    def _tracking_model_change():
 
-        key = plugin_skeleton_parameters.skeleton_model_type.value
+        key = plugin_tracking_parameters.tracking_model_type.value
         select_model_skeleton(key)
 
     @change_handler(plugin.vollseg_model_type, init=False)
@@ -1010,135 +842,7 @@ def plugin_wrapper_btrack():
                 "Invalid model directory"
             )
 
-    def _special_function(layer_data, skeleton_model):
-        estimators, estimator_inliers = _common_function(
-            layer_data, skeleton_model
-        )
-        line_locations = []
-        for i in range(len(estimators)):
-
-            estimator = estimators[i]
-            estimator_inlier = estimator_inliers[i]
-            estimator_inliers_list = np.copy(estimator_inlier)
-            if (
-                len(estimator_inliers_list)
-                > plugin_skeleton_parameters.min_num_time_points.value
-            ):
-                yarray, xarray = zip(*estimator_inliers_list.tolist())
-                yarray = np.asarray(yarray)
-                xarray = np.asarray(xarray)
-                if plugin_skeleton_parameters.time_axis.value == 0:
-                    time = yarray
-                else:
-                    time = xarray
-                time.sort()
-                if int(time[-1]) > int(time[0]):
-                    line_locations.append(
-                        [
-                            [estimator.predict(time[0]), time[0]],
-                            [estimator.predict(time[-1]), time[-1]],
-                        ]
-                    )
-                else:
-                    time[-1] = time[-1] + 1
-                    line_locations.append(
-                        [
-                            [estimator.predict(time[0]), time[0]],
-                            [estimator.predict(time[-1]), time[-1]],
-                        ]
-                    )
-
-        return line_locations
-
-    def _common_function(layer_data, skeleton_model):
-        non_zero_indices = list(zip(*np.where(layer_data > 0)))
-        sorted_non_zero_indices = sorted(
-            non_zero_indices,
-            key=lambda x: x[plugin_skeleton_parameters.time_axis.value],
-        )
-        yarray, xarray = zip(*sorted_non_zero_indices)
-
-        if skeleton_model == LinearFunction:
-            degree = 2
-            skeleton_result = skeleton(
-                sorted_non_zero_indices,
-                skeleton_model,
-                degree,
-                min_samples=plugin_skeleton_parameters.min_num_time_points.value,
-                max_trials=MAXTRIALS,
-                iterations=ITERATIONS,
-                residual_threshold=plugin_skeleton_parameters.max_error.value,
-                save_name="",
-            )
-        if skeleton_model == QuadraticFunction:
-            degree = 3
-
-            skeleton_result = Comboskeleton(
-                sorted_non_zero_indices,
-                LinearFunction,
-                QuadraticFunction,
-                min_samples=plugin_skeleton_parameters.min_num_time_points.value,
-                max_trials=MAXTRIALS,
-                iterations=ITERATIONS,
-                residual_threshold=plugin_skeleton_parameters.max_error.value,
-                save_name="",
-            )
-
-        estimators, estimator_inliers = skeleton_result.extract_multiple_lines()
-
-        return estimators, estimator_inliers
-
-    def _special_function_time(layer_data, skeleton_model, current_time):
-
-        if skeleton_model == LinearFunction:
-            degree = 2
-        if skeleton_model == QuadraticFunction:
-            degree = 3
-
-        time_estimators = {}
-        time_estimator_inliers = {}
-
-        i = current_time
-        non_zero_indices = list(zip(*np.where(layer_data > 0)))
-        sorted_non_zero_indices = sorted(
-            non_zero_indices,
-            key=lambda x: x[plugin_skeleton_parameters.time_axis.value],
-        )
-        if len(sorted_non_zero_indices) > 0:
-            yarray, xarray = zip(*sorted_non_zero_indices)
-            if skeleton_model == LinearFunction:
-                skeleton_result = skeleton(
-                    sorted_non_zero_indices,
-                    skeleton_model,
-                    degree,
-                    min_samples=plugin_skeleton_parameters.min_num_time_points.value,
-                    max_trials=MAXTRIALS,
-                    iterations=ITERATIONS,
-                    residual_threshold=plugin_skeleton_parameters.max_error.value,
-                    save_name="",
-                )
-            if skeleton_model == QuadraticFunction:
-
-                skeleton_result = Comboskeleton(
-                    sorted_non_zero_indices,
-                    LinearFunction,
-                    QuadraticFunction,
-                    min_samples=plugin_skeleton_parameters.min_num_time_points.value,
-                    max_trials=MAXTRIALS,
-                    iterations=ITERATIONS,
-                    residual_threshold=plugin_skeleton_parameters.max_error.value,
-                    save_name="",
-                )
-
-            (
-                estimators,
-                estimator_inliers,
-            ) = skeleton_result.extract_multiple_lines()
-
-            time_estimators[i] = estimators
-            time_estimator_inliers[i] = estimator_inliers
-        pred = time_estimators, time_estimator_inliers
-        return pred
+    
 
     @change_handler(plugin.model_folder_vollseg, init=False)
     def _model_vollseg_folder_change(_path: str):
@@ -1153,13 +857,7 @@ def plugin_wrapper_btrack():
         finally:
             select_model_vollseg(key)
 
-    @change_handler(plugin_skeleton_parameters.max_error)
-    def _max_error_change(value: float):
-        plugin_skeleton_parameters.max_error.value = value
-
-    @change_handler(plugin_skeleton_parameters.min_num_time_points)
-    def _min_num_time_points(value: int):
-        plugin_skeleton_parameters.min_num_time_points.value = value
+   
 
     @change_handler(plugin.microscope_calibration_space)
     def _microscope_calibration_space(value: float):
@@ -1167,10 +865,8 @@ def plugin_wrapper_btrack():
             "Enter the pixel unit to real unit conversion for X"
         )
         plugin.microscope_calibration_space.value = value
-        if plugin.image.value is not None:
-            ndim = len(get_data(plugin.image.value).shape)
+       
 
-            rate_calculator(ndim)
 
     @change_handler(plugin.microscope_calibration_time)
     def _microscope_calibration_time(value: float):
@@ -1181,438 +877,27 @@ def plugin_wrapper_btrack():
         if plugin.image.value is not None:
             ndim = len(get_data(plugin.image.value).shape)
 
-            rate_calculator(ndim)
 
-    @change_handler(plugin_skeleton_parameters.time_axis)
-    def _time_axis(value: int):
-        plugin_skeleton_parameters.time_axis.value = value
-
-    @change_handler(plugin_skeleton_parameters.defaults_params_button)
+   
+    @change_handler(plugin_tracking_parameters.defaults_params_button)
     def restore_prediction_parameters_defaults():
         for k, v in DEFAULTS_PRED_PARAMETERS.items():
-            getattr(plugin_skeleton_parameters, k).value = v
+            getattr(plugin_tracking_parameters, k).value = v
 
     @change_handler(plugin.defaults_model_button)
     def restore_model_defaults():
         for k, v in DEFAULTS_SEG_PARAMETERS.items():
             getattr(plugin, k).value = v
 
-    @change_handler(plugin.manual_compute_button)
-    def _manual_compute():
-
-        ndim = len(get_data(plugin.image.value).shape)
-
-        rate_calculator(ndim)
+   
 
     @change_handler(plugin.recompute_current_button)
     def _recompute_current():
 
-        currentfile = plugin.viewer.value.dims.current_step[0]
-        ndim = len(get_data(plugin.image.value).shape)
-        for layer in list(plugin.viewer.value.layers):
-            if (
-                isinstance(layer, napari.layers.Labels)
-                and layer.data.shape == get_data(plugin.image.value).shape
-            ):
-
-                layer_data = layer.data[currentfile]
-
-            if isinstance(layer, napari.layers.Shapes):
-                all_shape_layer_data = layer.data
-                new_layer_data = []
-
-                for current_layer_data in all_shape_layer_data:
-                    if currentfile not in current_layer_data:
-                        new_layer_data.append(current_layer_data)
-                plugin.viewer.value.layers.remove(layer)
-                if ndim == 3:
-
-                    (pred) = _special_function_time(
-                        layer_data,
-                        plugin_skeleton_parameters.skeleton_model_type.value,
-                        current_time=currentfile,
-                    )
-                    time_estimator, time_estimator_inliers = pred
-                    estimators = time_estimator[currentfile]
-                    estimator_inliers = time_estimator_inliers[currentfile]
-                    for j in range(len(estimators)):
-
-                        estimator = estimators[j]
-                        estimator_inlier = estimator_inliers[j]
-                        estimator_inliers_list = np.copy(estimator_inlier)
-                        yarray, xarray = zip(*estimator_inliers_list.tolist())
-                        yarray = np.asarray(yarray)
-                        xarray = np.asarray(xarray)
-                        xarray.sort()
-                        new_layer_data.append(
-                            [
-                                [
-                                    currentfile,
-                                    estimator.predict(xarray[0]),
-                                    xarray[0],
-                                ],
-                                [
-                                    currentfile,
-                                    estimator.predict(xarray[-1]),
-                                    xarray[-1],
-                                ],
-                            ]
-                        )
-                    for layer in list(plugin.viewer.value.layers):
-                        if isinstance(layer, napari.layers.Shapes):
-                            plugin.viewer.value.layers.remove(layer)
-
-                    plugin.viewer.value.add_shapes(
-                        np.asarray(new_layer_data),
-                        name="Fits_MTrack",
-                        shape_type="line",
-                        face_color=[0] * 4,
-                        edge_color="red",
-                        edge_width=1,
-                    )
-
-                else:
-                    shape_layer_data = _special_function(
-                        layer_data,
-                        plugin_skeleton_parameters.skeleton_model_type.value,
-                    )
-                    plugin.viewer.value.add_shapes(
-                        np.asarray(shape_layer_data),
-                        name="Fits_MTrack",
-                        shape_type="line",
-                        face_color=[0] * 4,
-                        edge_color="red",
-                        edge_width=1,
-                    )
-
-        rate_calculator(ndim)
-
+        pass
     # -> triggered by napari (if there are any open images on plugin launch)
 
-    def rate_calculator(ndim: int):
-
-        growth_events = []
-        shrink_events = []
-        cat_events = []
-        res_events = []
-        growth_events.append([None, None, None, None, None, None, None])
-        shrink_events.append([None, None, None, None, None, None, None])
-        cat_events.append([None, None, None, None, None, None, None])
-        res_events.append([None, None, None, None, None, None, None])
-        data = []
-        cat_frequ = 0
-        res_frequ = 0
-        min_start_height = np.inf
-        total_depol_time = 1
-        total_time = 1
-        for layer in list(plugin.viewer.value.layers):
-            if isinstance(layer, napari.layers.Shapes):
-                all_shape_layer_data = layer.data
-
-                for s in range(len(all_shape_layer_data)):
-                    shape_data = all_shape_layer_data[s]
-
-                    if ndim == 3:
-                        index = shape_data[0][0]
-                        next_index = index
-                        if s + 1 < len(all_shape_layer_data):
-                            next_shape_data = all_shape_layer_data[s + 1]
-                            next_index = next_shape_data[0][0]
-
-                        start_time = int(
-                            shape_data[0][
-                                1 + plugin_skeleton_parameters.time_axis.value
-                            ]
-                        )
-                        end_time = int(
-                            shape_data[1][
-                                1 + plugin_skeleton_parameters.time_axis.value
-                            ]
-                        )
-
-                        if end_time == start_time:
-                            end_time = end_time + 1
-                            start_time = start_time - 1
-                        rate = (
-                            shape_data[1][
-                                2 - plugin_skeleton_parameters.time_axis.value
-                            ]
-                            - shape_data[0][
-                                2 - plugin_skeleton_parameters.time_axis.value
-                            ]
-                        ) / abs(end_time - start_time)
-
-                        total_time = total_time + abs(end_time - start_time)
-
-                        start_height = shape_data[1][
-                            2 - plugin_skeleton_parameters.time_axis.value
-                        ]
-
-                        if start_height < min_start_height:
-                            min_start_height = start_height
-
-                        if s > 0:
-                            if start_height > min_start_height:
-                                res_frequ = res_frequ + 1
-
-                        rate = (
-                            rate
-                            * plugin.microscope_calibration_space.value
-                            / (
-                                plugin.microscope_calibration_time.value
-                                + 1.0e-10
-                            )
-                        )
-
-                        if rate >= 0 and len(all_shape_layer_data) > 1:
-
-                            growth_events.append(
-                                [
-                                    index,
-                                    rate,
-                                    None,
-                                    start_time,
-                                    end_time,
-                                    None,
-                                    None,
-                                ]
-                            )
-
-                        elif rate < 0:
-
-                            cat_frequ = cat_frequ + 1
-                            total_depol_time = total_depol_time + abs(
-                                end_time - start_time
-                            )
-
-                            if (
-                                next_index == index
-                                or s < len(all_shape_layer_data) - 1
-                                and len(all_shape_layer_data) > 1
-                            ):
-
-                                shrink_events.append(
-                                    [
-                                        index,
-                                        None,
-                                        rate,
-                                        start_time,
-                                        end_time,
-                                        None,
-                                        None,
-                                    ]
-                                )
-
-                        if (
-                            next_index != index
-                            or s == len(all_shape_layer_data) - 1
-                        ):
-                            cat_frequ = cat_frequ / (total_time + 1.0e-10)
-                            cat_frequ = cat_frequ / (
-                                plugin.microscope_calibration_time.value
-                                + 1.0e-10
-                            )
-
-                            res_frequ = res_frequ / (
-                                total_depol_time + 1.0e-10
-                            )
-                            res_frequ = res_frequ / (
-                                plugin.microscope_calibration_time.value
-                                + 1.0e-10
-                            )
-
-                            cat_events.append(
-                                [
-                                    index,
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                    cat_frequ,
-                                    None,
-                                ]
-                            )
-                            res_events.append(
-                                [
-                                    index,
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                    res_frequ,
-                                ]
-                            )
-
-                            cat_frequ = 0
-                            res_frequ = 0
-
-                            total_depol_time = 1
-                            total_time = 1
-
-                            data = np.vstack(
-                                (
-                                    growth_events,
-                                    shrink_events,
-                                    cat_events,
-                                    res_events,
-                                )
-                            )
-
-                    if ndim == 2:
-                        index = 0
-                        start_time = int(
-                            shape_data[0][
-                                plugin_skeleton_parameters.time_axis.value
-                            ]
-                        )
-                        end_time = int(
-                            shape_data[1][
-                                plugin_skeleton_parameters.time_axis.value
-                            ]
-                        )
-                        if end_time == start_time:
-                            end_time = end_time + 1
-                            start_time = start_time - 1
-                        rate = (
-                            shape_data[1][
-                                1 - plugin_skeleton_parameters.time_axis.value
-                            ]
-                            - shape_data[0][
-                                1 - plugin_skeleton_parameters.time_axis.value
-                            ]
-                        ) / (end_time - start_time)
-
-                        rate = (
-                            rate
-                            * plugin.microscope_calibration_space.value
-                            / (
-                                plugin.microscope_calibration_time.value
-                                + 1.0e-10
-                            )
-                        )
-                        total_time = total_time + abs(end_time - start_time)
-                        if rate >= 0 and len(all_shape_layer_data) > 1:
-                            growth_events.append(
-                                [
-                                    index,
-                                    rate,
-                                    None,
-                                    start_time,
-                                    end_time,
-                                    None,
-                                    None,
-                                ]
-                            )
-                        else:
-
-                            cat_frequ = cat_frequ + 1
-                            if (
-                                s < len(all_shape_layer_data) - 1
-                                and len(all_shape_layer_data) > 1
-                            ):
-
-                                shrink_events.append(
-                                    [
-                                        index,
-                                        None,
-                                        rate,
-                                        start_time,
-                                        end_time,
-                                        None,
-                                        None,
-                                    ]
-                                )
-
-                        if s == len(all_shape_layer_data) - 1:
-                            cat_frequ = cat_frequ / total_time
-                            cat_frequ = cat_frequ / (
-                                plugin.microscope_calibration_time.value
-                                + 1.0e-10
-                            )
-
-                            total_depol_time = total_depol_time + abs(
-                                end_time - start_time
-                            )
-                            res_frequ = res_frequ / total_depol_time
-                            res_frequ = res_frequ / (
-                                plugin.microscope_calibration_time.value
-                                + 1.0e-10
-                            )
-                            cat_events.append(
-                                [
-                                    index,
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                    cat_frequ,
-                                    None,
-                                ]
-                            )
-                            res_events.append(
-                                [
-                                    index,
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                    res_frequ,
-                                ]
-                            )
-
-                            data = np.vstack(
-                                (
-                                    growth_events,
-                                    shrink_events,
-                                    cat_events,
-                                    res_events,
-                                )
-                            )
-
-        # Polish the data here
-        polish_data = _polish_data(data)
-
-        df = pd.DataFrame(
-            polish_data,
-            columns=[
-                "File_Index",
-                "Growth_Rate",
-                "Shrink_Rate",
-                "Start_Time",
-                "End_Time",
-                "Cat_Frequ",
-                "Res_Frequ",
-            ],
-        )
-        _refreshTableData(df)
-
-    def _polish_data(data: np.ndarray):
-
-        polish_data = []
-        for i in range(data.shape[0]):
-            index = data[i, 0]
-            growth = data[i, 1]
-            shrink = data[i, 2]
-            # start = data[i, 3]
-            # end = data[i, 4]
-            # cat = data[i, 5]
-            # res = data[i, 6]
-
-            for j in range(data.shape[0]):
-                if j != i:
-                    sec_index = data[j, 0]
-                    sec_cat = data[j, 5]
-                    sec_res = data[j, 6]
-                    if sec_index == index and sec_cat is not None:
-                        data[i, 5] = sec_cat
-                    if sec_index == index and sec_res is not None:
-                        data[i, 6] = sec_res
-            if growth is not None or shrink is not None:
-                polish_data.append(data[i])
-
-        return polish_data
+    
 
     @change_handler(plugin.image, init=False)
     def _image_change(image: napari.layers.Image):

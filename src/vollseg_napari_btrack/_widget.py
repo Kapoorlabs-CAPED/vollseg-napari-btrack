@@ -271,7 +271,7 @@ def plugin_wrapper_btrack():
 
             def progress_thread(current_time):
 
-                progress_bar.label = "Fitting Functions (files)"
+                progress_bar.label = "Skeletonizing tissue in frame " + str(current_time)
                 progress_bar.range = (0, n_frames - 1)
                 progress_bar.value = current_time
                 progress_bar.show()
@@ -296,8 +296,7 @@ def plugin_wrapper_btrack():
             worker.returned.connect(return_segment_unet_time)
             worker.yielded.connect(progress_thread)
         else:
-            worker = _Unet(vollseg_model, x, axes, scale_out, tracking_model)
-            worker.returned.connect(return_segment_unet)
+            raise ValueError("Time dimension not found")
 
         progress_bar.hide()
 
@@ -308,7 +307,7 @@ def plugin_wrapper_btrack():
 
     def return_segment_unet_time(pred):
 
-        layer_data, time_line_locations, scale_out = pred
+        layer_data, scale_out = pred
         ndim = len(get_data(plugin.image.value).shape)
         name_remove = ["Fits_BTrack", "Seg_MTrack"]
         for layer in list(plugin.viewer.value.layers):
@@ -316,6 +315,16 @@ def plugin_wrapper_btrack():
                 plugin.viewer.value.layers.remove(layer)
 
         plugin.viewer.value.add_labels(layer_data, name="Seg_BTrack")
+        time_line_locations = []
+        for i in range(layer_data.shape[0]):
+                skeletonizer = Skeletonizer(layer_data[i].astype(np.uint16))
+                for point in skeletonizer.end_points:
+                       if ndim == 3:
+                            y, x = point 
+                            time_line_locations.append((i,y,x))
+                       if ndim == 4:
+                            z, y, x = point 
+                            time_line_locations.append((i,z,y,x))     
 
         plugin.viewer.value.add_shapes(
             np.asarray(time_line_locations),
@@ -326,7 +335,6 @@ def plugin_wrapper_btrack():
             edge_width=1,
         )
 
-        rate_calculator(ndim)
 
     def plot_main():
         if plot_class.scroll_layout.count() > 0:
@@ -353,7 +361,6 @@ def plugin_wrapper_btrack():
             edge_width=1,
         )
 
-        rate_calculator(ndim)
 
     @thread_worker(connect={"returned": [return_segment_unet_time, plot_main]})
     def _Unet_time(
@@ -408,9 +415,9 @@ def plugin_wrapper_btrack():
             skeleton = np.moveaxis(skeleton, 0, t)
             skeleton = np.reshape(skeleton, x.shape)
 
-            layer_data = np.zeros_like(unet_mask)
-            for i in range(unet_mask.shape[0]):
-                layer_data[i] = thin(unet_mask[i])
+            layer_data = unet_mask
+            
+            
 
         else:
             for layer in list(plugin.viewer.value.layers):
@@ -420,8 +427,6 @@ def plugin_wrapper_btrack():
                 ):
 
                     layer_data = layer.data
-
-
        
         if tracking_model == IOUTracker:
             print("IOUTracker")
@@ -436,63 +441,7 @@ def plugin_wrapper_btrack():
         pred = layer_data, scale_out
         return pred
 
-    @thread_worker(connect={"returned": [return_segment_unet, plot_main]})
-    def _Unet(model_unet, x, axes, scale_out, tracking_model):
-
-        correct_label_present = []
-        any_label_present = []
-        for layer in list(plugin.viewer.value.layers):
-            if (
-                isinstance(layer, napari.layers.Labels)
-                and layer.data.shape == get_data(plugin.image.value).shape
-            ):
-                correct_label_present.append(True)
-            elif (
-                isinstance(layer, napari.layers.Labels)
-                and layer.data.shape != get_data(plugin.image.value).shape
-            ):
-                correct_label_present.append(False)
-
-            if not isinstance(layer, napari.layers.Labels):
-                any_label_present.append(False)
-            elif isinstance(layer, napari.layers.Labels):
-                any_label_present.append(True)
-        if (
-            any(correct_label_present) is False
-            or any(any_label_present) is False
-        ):
-
-            res = VollSeg(
-                x,
-                unet_model=model_unet,
-                n_tiles=plugin.n_tiles.value,
-                axes=axes,
-            )
-
-            unet_mask, skeleton = res
-
-            layer_data = thin(unet_mask)
-
-        else:
-            for layer in list(plugin.viewer.value.layers):
-                if (
-                    isinstance(layer, napari.layers.Labels)
-                    and layer.data.shape == get_data(plugin.image.value).shape
-                ):
-
-                    layer_data = layer.data
-
-       
-        if tracking_model == IOUTracker:
-            print('iou tracker')
-        if tracking_model == CentroidKF_Tracker:
-            print('centroid kf tracker')
-
-        if tracking_model == CentroidTracker:
-            print('centroid tracker')
-
-        pred = layer_data, scale_out
-        return pred
+   
 
     widget_for_vollseg_modeltype = {
         UNET: plugin.model_vollseg,

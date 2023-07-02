@@ -428,7 +428,7 @@ def plugin_wrapper_btrack():
 
         if "T" in axes:
             t = axes_dict(axes)["T"]
-            n_frames = x.shape[t]
+            n_frames = x.shape[0]
             print(n_frames)
             def progress_thread(current_time):
 
@@ -469,7 +469,7 @@ def plugin_wrapper_btrack():
 
     def return_segment_unet_time(pred):
 
-        layer_data, scale_out = pred
+        layer_data, time_line_locations, scale_out = pred
         ndim = len(get_data(plugin.image.value).shape)
         name_remove = ["Fits_BTrack", "Seg_BTrack", "Seg_BTrack_Dots"]
         for layer in list(plugin.viewer.value.layers):
@@ -477,26 +477,6 @@ def plugin_wrapper_btrack():
                 plugin.viewer.value.layers.remove(layer)
 
         plugin.viewer.value.add_labels(layer_data, name="Seg_BTrack")
-        time_line_locations = {}
-        for i in range(layer_data.shape[0]):
-                skeletonizer = Skeletonizer(layer_data[i].astype(np.uint16))
-                for point in skeletonizer.end_points:
-                       if ndim == 3:
-                            y, x = point 
-                            if i not in time_line_locations:
-                                time_line_locations[i] = [(y,x)]
-                            else:
-                                y_x_list = time_line_locations[i]
-                                y_x_list.append((y,x))
-                                time_line_locations[i] = y_x_list
-                       if ndim == 4:
-                            z, y, x = point 
-                            if i not in time_line_locations:
-                                time_line_locations[i] = [(z,y,x)]
-                            else:
-                                z_y_x_list = time_line_locations[i]
-                                z_y_x_list.append((z,y,x))
-                                time_line_locations[i] = z_y_x_list       
 
         markers = np.zeros_like(layer_data)                      
         for (time,Coordinates) in time_line_locations.items():
@@ -608,7 +588,7 @@ def plugin_wrapper_btrack():
         ):
 
             for count, _x in enumerate(x_reorder):
-
+                yield count 
                 pre_res.append(
                     VollSeg(
                         _x,
@@ -644,8 +624,29 @@ def plugin_wrapper_btrack():
 
                     layer_data = layer.data
        
-
-        pred = layer_data, scale_out
+        time_line_locations = {}
+        ndim = len(layer_data.shape)
+        for count, i in enumerate(range(layer_data.shape[0])):
+                yield count
+                skeletonizer = Skeletonizer(layer_data[i].astype(np.uint16))
+                for point in skeletonizer.end_points:
+                       if ndim == 3:
+                            y, x = point 
+                            if i not in time_line_locations:
+                                time_line_locations[i] = [(y,x)]
+                            else:
+                                y_x_list = time_line_locations[i]
+                                y_x_list.append((y,x))
+                                time_line_locations[i] = y_x_list
+                       if ndim == 4:
+                            z, y, x = point 
+                            if i not in time_line_locations:
+                                time_line_locations[i] = [(z,y,x)]
+                            else:
+                                z_y_x_list = time_line_locations[i]
+                                z_y_x_list.append((z,y,x))
+                                time_line_locations[i] = z_y_x_list 
+        pred = layer_data, time_line_locations, scale_out
         return pred
 
    

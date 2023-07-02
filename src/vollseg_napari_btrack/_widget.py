@@ -8,7 +8,7 @@ import functools
 import time
 from pathlib import Path
 from typing import List, Union
-
+from skimage import morphology
 import napari
 import numpy as np
 import pandas as pd
@@ -21,6 +21,7 @@ from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 from skimage.morphology import thin
 from motrackers import CentroidTracker, IOUTracker, CentroidKF_Tracker
+import btrack
 ITERATIONS = 20
 MAXTRIALS = 100
 
@@ -113,7 +114,7 @@ def plugin_wrapper_btrack():
     DEFAULTS_SEG_PARAMETERS = dict(n_tiles=(1, 1, 1))
 
     DEFAULTS_PRED_PARAMETERS = dict(
-       
+       max_lost = 5
     )
 
     def get_model_tracking(tracking_model_type):
@@ -140,7 +141,13 @@ def plugin_wrapper_btrack():
 
     @magicgui(
         
-       
+         max_lost=dict(
+            widget_type="SpinBox",
+            label="Maximum number of consecutive frames object was not detected",
+            min=0.0,
+            step=1,
+            value=DEFAULTS_PRED_PARAMETERS["max_lost"],
+        ),
         tracking_model_type=dict(
             widget_type="RadioButtons",
             label="Tracking Model Type",
@@ -154,6 +161,7 @@ def plugin_wrapper_btrack():
         call_button=False,
     )
     def plugin_tracking_parameters(
+        max_lost,
         tracking_model_type,
         defaults_params_button,
     ) -> List[napari.types.LayerDataTuple]:
@@ -309,7 +317,7 @@ def plugin_wrapper_btrack():
 
         layer_data, scale_out = pred
         ndim = len(get_data(plugin.image.value).shape)
-        name_remove = ["Fits_BTrack", "Seg_MTrack"]
+        name_remove = ["Fits_BTrack", "Seg_BTrack", "Seg_BTrack_Dots"]
         for layer in list(plugin.viewer.value.layers):
             if any(name in layer.name for name in name_remove):
                 plugin.viewer.value.layers.remove(layer)
@@ -324,13 +332,33 @@ def plugin_wrapper_btrack():
                             time_line_locations.append((i,y,x))
                        if ndim == 4:
                             z, y, x = point 
-                            time_line_locations.append((i,z,y,x))     
+                            time_line_locations.append((i,z,y,x))   
 
-        plugin.viewer.value.add_shapes(
+        markers = np.zeros_like(layer_data)                      
+        for i in range(time_line_locations):
+                Coordinates = time_line_locations[i]
+                Coordinates = np.asarray(Coordinates)
+                coordinates_int = np.round(Coordinates).astype(int)
+
+                markers_raw = markers[i]
+                markers_raw[tuple(coordinates_int.T)] = 1 + np.arange(len(Coordinates))
+                if ndim == 4:
+                    markers[i] = morphology.dilation(
+                        markers_raw.astype("uint16"), morphology.ball(2)
+                    )
+                if ndim == 3:
+                    markers[i] = morphology.dilation(
+                        markers_raw.astype("uint16"), morphology.disk(2)
+                    )   
+        plugin.viewer.value.add_labels(markers, name="Seg_BTrack_Dots")      
+        if ndim == 4:   
+            face_color = [0] * 4
+        if ndim == 3:
+            face_color = [0] * 3    
+        plugin.viewer.value.add_points(
             np.asarray(time_line_locations),
             name="Fits_BTrack",
-            shape_type="line",
-            face_color=[0] * 4,
+            face_color=face_color,
             edge_color="red",
             edge_width=1,
         )
@@ -340,26 +368,6 @@ def plugin_wrapper_btrack():
         if plot_class.scroll_layout.count() > 0:
             plot_class._reset_container(plot_class.scroll_layout)
         _refreshPlotData(table_tab._data.get_data())
-
-    def return_segment_unet(pred):
-
-        layer_data, line_locations, scale_out = pred
-        ndim = len(get_data(plugin.image.value).shape)
-        name_remove = ["Fits_BTrack", "Seg_BTrack"]
-        for layer in list(plugin.viewer.value.layers):
-            if any(name in layer.name for name in name_remove):
-                plugin.viewer.value.layers.remove(layer)
-
-        plugin.viewer.value.add_labels(layer_data, name="Seg_BTrack")
-
-        plugin.viewer.value.add_shapes(
-            np.asarray(line_locations),
-            name="Fits_MTrack",
-            shape_type="line",
-            face_color=[0] * 4,
-            edge_color="red",
-            edge_width=1,
-        )
 
 
     @thread_worker(connect={"returned": [return_segment_unet_time, plot_main]})
@@ -486,21 +494,13 @@ def plugin_wrapper_btrack():
         plot_class._repeat_after_plot()
         ax = plot_class.stat_ax
 
-        sns.violinplot(x="Shrink_Rate", data=df, ax=ax)
+        sns.violinplot(x="Average_Displacement", data=df, ax=ax)
 
-        ax.set_xlabel("Shrink Rate")
-
-        plot_class._repeat_after_plot()
-        ax = plot_class.stat_ax
-        sns.violinplot(x="Cat_Frequ", data=df, ax=ax)
-
-        ax.set_xlabel("Catastrophe Frequency")
+        ax.set_xlabel("Average Displacement")
 
         plot_class._repeat_after_plot()
         ax = plot_class.stat_ax
-        sns.violinplot(x="Res_Frequ", data=df, ax=ax)
-
-        ax.set_xlabel("Rescue Frequency")
+        
 
     def _refreshTableData(df: pd.DataFrame):
 

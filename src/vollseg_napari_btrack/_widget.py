@@ -20,7 +20,6 @@ from napari.qt.threading import thread_worker
 from psygnal import Signal
 from qtpy.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 from skimage.morphology import thin
-from motrackers import CentroidTracker, IOUTracker, CentroidKF_Tracker
 import btrack
 ITERATIONS = 20
 MAXTRIALS = 100
@@ -95,9 +94,7 @@ def plugin_wrapper_btrack():
     ]
 
     track_model_type_choices = [
-        ("Centroid", CentroidTracker),
-        ("IOU", IOUTracker),
-        ("Kalman", CentroidKF_Tracker),
+        ("BTrack", btrack)
     ]
     default_tracking_config = {
   "name": "Default",
@@ -254,7 +251,7 @@ def plugin_wrapper_btrack():
     }
     DEFAULTS_MODEL = dict(
         vollseg_model_type=CUSTOM_VOLLSEG,
-        tracking_model_type=CentroidTracker,
+        tracking_model_type=btrack,
         model_vollseg=models_vollseg[0][0],
         model_vollseg_none="NOSEG",
         axes="TYX",
@@ -537,7 +534,7 @@ def plugin_wrapper_btrack():
             # store the configuration
             cfg = tracker.configuration
             data, properties, graph = tracker.to_napari()
-            
+
         plugin.viewer.add_tracks(data, properties=properties, graph=graph)
 
 
@@ -614,15 +611,6 @@ def plugin_wrapper_btrack():
 
                     layer_data = layer.data
        
-        if tracking_model == IOUTracker:
-            print("IOUTracker")
-        if tracking_model == CentroidKF_Tracker:
-
-            print("CentroidKF_Tracker")
-        if tracking_model == CentroidTracker:
-
-            print("CentroidTracker")   
-
 
         pred = layer_data, scale_out
         return pred
